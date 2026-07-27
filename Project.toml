@@ -1,0 +1,19 @@
+name = "DifferentiableKomaMRI"
+uuid = "d347c0cd-7a3b-41b9-8ba9-9bf78ba07c82"
+version = "0.1.0-DEV"
+authors = ["aiyaszk"]
+
+[deps]
+KomaMRI = "6a340f8b-2cdf-4c04-99be-4953d9b66d0a"
+Optim = "429524aa-4258-5aef-a3af-852621145aeb"
+
+[compat]
+KomaMRI = "0.13"
+Optim = "1, 2"
+julia = "1.10"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
