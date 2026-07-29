@@ -2,24 +2,28 @@
 
 Differentiable MRI simulation for physics-based reconstruction.
 
-This research code uses multi-coil [KomaMRI.jl](https://github.com/JuliaHealth/KomaMRI.jl)
-as a forward model for small density and T1 reconstruction experiments. Central finite
-differences are the initial gradient reference and are not intended for large images.
+The single script `DiffPhysicsMRISimReco.jl` uses the same local 3T phantom,
+accelerated EPI sequence, measured MRD data, and ESPIRiT coil maps as the KomaMRI
+custom-sensitivity-map how-to. It keeps T1 fixed and reconstructs only the three
+density levels present in the phantom.
 
 ## Run
 
 ```sh
-julia DiffPhysicsMRISimRecon.jl
+julia DiffPhysicsMRISimReco.jl
 ```
 
-The first run installs the dependency versions pinned in `Manifest.toml`, including the
-required multi-coil KomaMRI development branch.
+The Koma simulations build one density basis from each tissue group. The optimizer
+then minimizes the measured multi-coil data error with central finite differences.
+The script activates and instantiates its own environment, runs gradient descent
+directly, and saves the result as `reconstructed_density.png`.
 
-Use `--quick` to run only two optimizer iterations:
+Use ten spins per density for a fast code check:
 
 ```sh
-julia DiffPhysicsMRISimRecon.jl --quick
+julia DiffPhysicsMRISimReco.jl --quick
 ```
 
-This is a standalone research project, not a Julia package. The main script runs the
-experiments and `reconstruction.jl` contains the small shared helpers.
+This is the first real-data baseline, not yet a free 128 × 128 image reconstruction.
+Central differences need two forward evaluations per unknown, so a voxelwise version
+would need 32,768 Koma simulations for every full gradient.
