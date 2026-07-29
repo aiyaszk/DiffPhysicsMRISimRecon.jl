@@ -1,43 +1,25 @@
-# DifferentiableKomaMRI.jl
+# DiffPhysicsMRISimRecon
 
-Experimental nonlinear inverse problems using multi-coil
-[KomaMRI.jl](https://github.com/JuliaHealth/KomaMRI.jl) as the forward model.
+Differentiable MRI simulation for physics-based reconstruction.
 
-The initial baseline uses central finite differences to calculate gradients and compares
-gradient descent with L-BFGS for:
+This research code uses multi-coil [KomaMRI.jl](https://github.com/JuliaHealth/KomaMRI.jl)
+as a forward model for small density and T1 reconstruction experiments. Central finite
+differences are the initial gradient reference and are not intended for large images.
 
-- fully sampled image reconstruction;
-- genuinely accelerated `R=2` EPI acquisition; and
-- joint proton-density and T1 reconstruction from multiple inversion times.
-
-Finite differences are intentionally the reference implementation. They require two
-forward simulations per parameter and will not scale to clinical image sizes. Their role
-is to validate objectives and future automatic-differentiation or adjoint gradients.
-
-## Development setup
-
-The current examples require the multi-coil KomaMRI development branch:
-
-```julia
-using Pkg
-Pkg.add(url="https://github.com/aiyaszk/KomaMRI.jl", rev="multi-coils-blochsimple-support")
-Pkg.develop(path="/path/to/DifferentiableKomaMRI.jl")
-Pkg.test("DifferentiableKomaMRI")
-```
-
-## Examples
+## Run
 
 ```sh
-julia --project=. examples/01_density_reconstruction.jl
-julia --project=. examples/02_t1_reconstruction.jl
+julia DiffPhysicsMRISimRecon.jl
 ```
 
-Pass `--quick` during development to limit each optimizer to two iterations.
+The first run installs the dependency versions pinned in `Manifest.toml`, including the
+required multi-coil KomaMRI development branch.
 
-## Roadmap
+Use `--quick` to run only two optimizer iterations:
 
-1. Establish finite-difference gradient and optimizer baselines.
-2. Add noise, regularization, and measured sensitivity maps.
-3. Scale the full and accelerated experiments beyond the 4-by-4 validation problem.
-4. Implement matrix-free sensitivity or adjoint gradients and compare them against finite
-   differences.
+```sh
+julia DiffPhysicsMRISimRecon.jl --quick
+```
+
+This is a standalone research project, not a Julia package. The main script runs the
+experiments and `reconstruction.jl` contains the small shared helpers.
