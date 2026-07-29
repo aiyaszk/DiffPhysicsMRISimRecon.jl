@@ -2,28 +2,30 @@
 
 Differentiable MRI simulation for physics-based reconstruction.
 
-The single script `DiffPhysicsMRISimReco.jl` uses the same local 3T phantom,
-accelerated EPI sequence, measured MRD data, and ESPIRiT coil maps as the KomaMRI
-custom-sensitivity-map how-to. It keeps T1 fixed and reconstructs only the three
-density levels present in the phantom.
+## Model-based reconstruction
 
-## Run
+`DiffPhysicsMRISimReco.jl` uses CPU Bloch simulations and central finite
+differences to estimate the phantom's three density levels from measured
+multi-coil data. It keeps T1 fixed and saves `reconstructed_density.png`.
 
 ```sh
 julia DiffPhysicsMRISimReco.jl
 ```
 
-The Koma simulations build one density basis from each tissue group. The optimizer
-then minimizes the measured multi-coil data error with central finite differences.
-The script activates and instantiates its own environment, runs gradient descent
-directly, and saves the result as `reconstructed_density.png`.
+## MRIReco comparison
 
-Use ten spins per density for a fast code check:
+`MRIRecoResults.jl` reproduces the measured-versus-simulated comparison from
+the KomaMRI custom-coil-sensitivity how-to.
 
 ```sh
-julia DiffPhysicsMRISimReco.jl --quick
+julia MRIRecoResults.jl
 ```
 
-This is the first real-data baseline, not yet a free 128 × 128 image reconstruction.
-Central differences need two forward evaluations per unknown, so a voxelwise version
-would need 32,768 Koma simulations for every full gradient.
+It saves:
+
+- `MRIRecoResults/acquisition_direct.png`
+- `MRIRecoResults/acquisition_sense.png`
+- `MRIRecoResults/simulated_mrd_direct.png`
+- `MRIRecoResults/simulated_mrd_sense.png`
+
+Both scripts activate and instantiate the included Julia environment.
