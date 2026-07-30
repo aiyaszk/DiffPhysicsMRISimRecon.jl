@@ -1,14 +1,12 @@
-# MRIReco comparison of measured and KomaMRI-simulated acquisitions
+# MRIReco comparison of measured and node-simulated acquisitions
 
 using Pkg
 Pkg.activate(@__DIR__)
 Pkg.instantiate()
 
 using KomaMRI, MRICoilSensitivities
-using KomaMRIBase: ArbitraryCoilSens
 using Statistics: quantile
 
-# Local inputs
 fully_sampled_mrd_file = joinpath(
     homedir(),
     "Desktop/Archive (1)/mrd_hdf5/meas_MID01094_FID34194_hard_epi_20interleaves_5avg_fatsat.mrd",
@@ -21,10 +19,7 @@ accelerated_2x_seq_file = joinpath(
     homedir(),
     "Desktop/Archive (1)/seq/hard_epi_2x_20interleaves_5avg_fatsat.seq",
 )
-phantom_2D_3T_file = joinpath(
-    homedir(),
-    "Downloads/brain2D_3T_fat_z1cm_2x_xy.phantom",
-)
+simulated_mrd_file = joinpath(@__DIR__, "simulated_acquisition.mrd")
 
 function select_profiles!(raw, lines)
     raw.profiles = raw.profiles[4:(3 + length(lines))]
@@ -44,7 +39,6 @@ acquired_lines = [
     line for shot in acquired_shots for line in shot:shots:(recon_size[2] - 1)
 ]
 
-# ESPIRiT maps from the fully sampled reference
 raw_reference = RawAcquisitionData(ISMRMRDFile(fully_sampled_mrd_file))
 raw_reference.profiles = raw_reference.profiles[4:(3 + recon_size[2])]
 acq_reference = AcquisitionData(raw_reference)
@@ -58,35 +52,9 @@ sensitivity_maps = espirit(
     eigThresh_2=0.0,
 )
 
-fov = Float32.(raw_reference.params["reconFOV"]) .* 1f-3
-x = collect(LinRange(-fov[1] / 2, fov[1] / 2, recon_size[1]))
-y = collect(LinRange(-fov[2] / 2, fov[2] / 2, recon_size[2]))
-z = Float32[-fov[3] / 2, 0, fov[3] / 2]
-receiver = ArbitraryCoilSens(
-    x,
-    y,
-    z,
-    repeat(sensitivity_maps, 1, 1, length(z), 1),
-)
-
-# Measured and simulated R=2 acquisitions
 raw_measured = RawAcquisitionData(ISMRMRDFile(accelerated_2x_mrd_file))
+raw_simulated = RawAcquisitionData(ISMRMRDFile(simulated_mrd_file))
 select_profiles!(raw_measured, acquired_lines)
-
-adc_blocks = findall(block -> is_ADC_on(seq[block]), 1:length(seq))
-seq = seq[1:adc_blocks[3 + length(acquired_lines)]]
-raw_simulated = simulate(
-    read_phantom(phantom_2D_3T_file),
-    seq,
-    Scanner(; receiver);
-    sim_params=Dict{String,Any}(
-        "gpu" => false,
-        "precision" => "f64",
-        "sim_method" => Bloch(),
-    ),
-    physio=CardiacSignal(; heart_rate=1),
-    verbose=false,
-)
 select_profiles!(raw_simulated, acquired_lines)
 
 acq_measured = AcquisitionData(raw_measured)
@@ -115,8 +83,8 @@ simulated_sense = magnitude_image(reconstruction(acq_simulated, sense_params))
 results = (
     ("acquisition_direct.png", reverse(measured_direct; dims=(1, 2)), "Measured direct (R=2)"),
     ("acquisition_sense.png", reverse(measured_sense; dims=(1, 2)), "Measured SENSE (R=2)"),
-    ("simulated_mrd_direct.png", simulated_direct, "Simulated direct (R=2)"),
-    ("simulated_mrd_sense.png", simulated_sense, "Simulated SENSE (R=2)"),
+    ("simulated_mrd_direct.png", simulated_direct, "Node-simulated direct (R=2)"),
+    ("simulated_mrd_sense.png", simulated_sense, "Node-simulated SENSE (R=2)"),
 )
 
 output_directory = joinpath(@__DIR__, "MRIRecoResults")

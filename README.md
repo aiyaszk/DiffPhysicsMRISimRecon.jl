@@ -2,26 +2,31 @@
 
 Differentiable MRI simulation for physics-based reconstruction.
 
-## Model-based reconstruction
+## Node-density reconstruction
 
-`DiffPhysicsMRISimReco.jl` uses CPU Bloch simulations and central finite
-differences to estimate the phantom's three density levels from measured
-multi-coil data. It keeps T1 fixed and saves `reconstructed_density.png`.
+`DiffPhysicsMRISimReco.jl` creates a 126 × 126 grid of reconstruction nodes over
+the measured field of view. It does not load a brain phantom or use known tissue
+masks. T1 and T2 are fixed, while central finite differences estimate the 15,876
+relative node densities from measured multi-coil data. KomaMRI runs the Bloch
+simulations on the Apple GPU through Metal.jl. One complete gradient requires
+31,752 KomaMRI simulations.
 
 ```sh
 julia DiffPhysicsMRISimReco.jl
 ```
 
+It saves `reconstructed_density.png` and `simulated_acquisition.mrd`.
+
 ## MRIReco comparison
 
-`MRIRecoResults.jl` reproduces the measured-versus-simulated comparison from
-the KomaMRI custom-coil-sensitivity how-to.
+Run the model-based reconstruction first, then:
 
 ```sh
 julia MRIRecoResults.jl
 ```
 
-It saves:
+The second script reconstructs the measured and node-simulated MRD files and
+saves:
 
 - `MRIRecoResults/acquisition_direct.png`
 - `MRIRecoResults/acquisition_sense.png`
