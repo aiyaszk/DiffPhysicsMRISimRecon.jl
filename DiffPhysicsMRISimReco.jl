@@ -1,35 +1,50 @@
-# Finite-difference reconstruction on a 126 × 126 node grid
+# Finite-difference reconstruction on a 64 × 64 voxel grid
 
 using Pkg
 Pkg.activate(@__DIR__)
 Pkg.instantiate()
 
-using FiniteDiff, KomaMRI, Metal, MRICoilSensitivities
+using FiniteDiff, KomaMRI, MRICoilSensitivities
+using Interpolations: Flat, linear_interpolation
 using KomaMRIBase: ArbitraryCoilSens, Phantom
 using LinearAlgebra: norm
 using Statistics: mean
 
+if Sys.isapple()
+    @eval using Metal
+else
+    @eval using CUDA
+end
+
 # Local acquisition files
+archive_directory = isempty(ARGS) ? joinpath(homedir(), "Desktop/Archive (1)") : first(ARGS)
 fully_sampled_mrd_file = joinpath(
-    homedir(),
-    "Desktop/Archive (1)/mrd_hdf5/meas_MID01094_FID34194_hard_epi_20interleaves_5avg_fatsat.mrd",
+    archive_directory,
+    "mrd_hdf5/meas_MID01094_FID34194_hard_epi_20interleaves_5avg_fatsat.mrd",
 )
 accelerated_2x_mrd_file = joinpath(
-    homedir(),
-    "Desktop/Archive (1)/mrd_hdf5/meas_MID01109_FID34203_hard_epi_2x_20interleaves_5avg_fatsat.mrd",
+    archive_directory,
+    "mrd_hdf5/meas_MID01109_FID34203_hard_epi_2x_20interleaves_5avg_fatsat.mrd",
 )
 accelerated_2x_seq_file = joinpath(
-    homedir(),
-    "Desktop/Archive (1)/seq/hard_epi_2x_20interleaves_5avg_fatsat.seq",
+    archive_directory,
+    "seq/hard_epi_2x_20interleaves_5avg_fatsat.seq",
 )
 simulated_mrd_file = joinpath(@__DIR__, "simulated_acquisition.mrd")
 
 recon_size = (128, 128)
-node_grid = (126, 126)
+voxel_grid = (64, 64)
+subspin_grid = (5, 2)
+spins_per_voxel_per_slice = prod(subspin_grid)
+slice_count = 10
+simulation_spins_per_voxel = spins_per_voxel_per_slice * slice_count
 navigators = 3
-fixed_T1 = 1.0
-fixed_T2 = 0.1
+fixed_T1 = Inf
+fixed_T2 = Inf
+finite_difference_step = cbrt(eps(Float32))
 maximum_iterations = 10
+iteration_directory = joinpath(@__DIR__, "DiffPhysicsMRISimRecoIterations")
+mkpath(iteration_directory)
 
 # Sequence and acquired R=2 profiles
 seq = read_seq(accelerated_2x_seq_file)
@@ -73,29 +88,68 @@ receiver = ArbitraryCoilSens(
 )
 scanner = Scanner(; receiver)
 
-# Uniform reconstruction nodes at the grid-cell centers
-spacing_x = fov[1] / node_grid[1]
-spacing_y = fov[2] / node_grid[2]
-axis_x = collect(
-    range(-fov[1] / 2 + spacing_x / 2, fov[1] / 2 - spacing_x / 2; length=node_grid[1]),
+# Uniform reconstruction voxels
+voxel_spacing_x = fov[1] / voxel_grid[1]
+voxel_spacing_y = fov[2] / voxel_grid[2]
+voxel_axis_x = collect(
+    range(
+        -fov[1] / 2 + voxel_spacing_x / 2,
+        fov[1] / 2 - voxel_spacing_x / 2;
+        length=voxel_grid[1],
+    ),
 )
-axis_y = collect(
-    range(-fov[2] / 2 + spacing_y / 2, fov[2] / 2 - spacing_y / 2; length=node_grid[2]),
+voxel_axis_y = collect(
+    range(
+        -fov[2] / 2 + voxel_spacing_y / 2,
+        fov[2] / 2 - voxel_spacing_y / 2;
+        length=voxel_grid[2],
+    ),
 )
-node_x = repeat(axis_x, node_grid[2])
-node_y = repeat(axis_y; inner=node_grid[1])
-node_count = length(node_x)
+voxel_count = prod(voxel_grid)
 
-function node_object(density)
+simulation_grid = voxel_grid .* subspin_grid
+simulation_spacing_x = fov[1] / simulation_grid[1]
+simulation_spacing_y = fov[2] / simulation_grid[2]
+simulation_axis_x = collect(
+    range(
+        -fov[1] / 2 + simulation_spacing_x / 2,
+        fov[1] / 2 - simulation_spacing_x / 2;
+        length=simulation_grid[1],
+    ),
+)
+simulation_axis_y = collect(
+    range(
+        -fov[2] / 2 + simulation_spacing_y / 2,
+        fov[2] / 2 - simulation_spacing_y / 2;
+        length=simulation_grid[2],
+    ),
+)
+slice_spacing = fov[3] / slice_count
+slice_axis = collect(
+    range(-fov[3] / 2 + slice_spacing / 2, fov[3] / 2 - slice_spacing / 2; length=slice_count),
+)
+inplane_spin_x = repeat(simulation_axis_x, simulation_grid[2])
+inplane_spin_y = repeat(simulation_axis_y; inner=simulation_grid[1])
+spin_x = repeat(inplane_spin_x, slice_count)
+spin_y = repeat(inplane_spin_y, slice_count)
+spin_z = repeat(slice_axis; inner=length(inplane_spin_x))
+spin_count = length(spin_x)
+
+function simulation_object(density)
+    interpolation = linear_interpolation(
+        (voxel_axis_x, voxel_axis_y),
+        reshape(density, voxel_grid);
+        extrapolation_bc=Flat(),
+    )
     Phantom(;
-        name="$(node_grid[1])x$(node_grid[2]) reconstruction nodes",
-        x=node_x,
-        y=node_y,
-        z=zeros(node_count),
-        ρ=density,
-        T1=fill(fixed_T1, node_count),
-        T2=fill(fixed_T2, node_count),
-        T2s=fill(fixed_T2, node_count),
+        name="$(voxel_grid[1])x$(voxel_grid[2]) reconstruction voxels",
+        x=spin_x,
+        y=spin_y,
+        z=spin_z,
+        ρ=interpolation.(spin_x, spin_y) ./ simulation_spins_per_voxel,
+        T1=fill(fixed_T1, spin_count),
+        T2=fill(fixed_T2, spin_count),
+        T2s=fill(fixed_T2, spin_count),
     )
 end
 
@@ -106,11 +160,11 @@ sim_params = Dict{String,Any}(
     "return_type" => "mat",
 )
 
-function simulate_nodes(density; return_type="mat")
+function forward(density; return_type="mat")
     parameters = copy(sim_params)
     parameters["return_type"] = return_type
     simulate(
-        node_object(density),
+        simulation_object(density),
         seq,
         scanner;
         sim_params=parameters,
@@ -119,13 +173,13 @@ function simulate_nodes(density; return_type="mat")
     )
 end
 
-node_density(parameters) = begin
+voxel_density(parameters) = begin
     density = exp.(parameters .- maximum(parameters))
     density ./ mean(density)
 end
 
 function objective(parameters)
-    signal = simulate_nodes(node_density(parameters))
+    signal = forward(voxel_density(parameters))
     predicted = signal[(end - size(measured_data, 1) + 1):end, :]
     coil_gain =
         sum(conj.(predicted) .* measured_data; dims=1) ./ sum(abs2, predicted; dims=1)
@@ -133,10 +187,22 @@ function objective(parameters)
     sum(abs2, residual) / (2sum(abs2, measured_data))
 end
 
-parameters = zeros(node_count)
+function save_iteration_image(parameters, iteration)
+    density = reshape(voxel_density(parameters), voxel_grid)
+    file = joinpath(iteration_directory, "iteration_$(lpad(iteration, 2, '0')).png")
+    savefig(plot_image(density; title="Iteration $iteration voxel density"), file)
+end
+
+parameters = zeros(voxel_count)
+save_iteration_image(parameters, 0)
 for iteration in 1:maximum_iterations
     loss = objective(parameters)
-    local gradient = FiniteDiff.finite_difference_gradient(objective, parameters)
+    local gradient = FiniteDiff.finite_difference_gradient(
+        objective,
+        parameters;
+        relstep=finite_difference_step,
+        absstep=finite_difference_step,
+    )
     gradient_norm = norm(gradient)
     gradient_norm <= 1e-8 && break
 
@@ -145,16 +211,17 @@ for iteration in 1:maximum_iterations
         step /= 2
     end
     parameters .-= step .* gradient
+    save_iteration_image(parameters, iteration)
     println("Iteration $iteration: loss = $(objective(parameters)), gradient = $gradient_norm")
 end
 
-reconstructed_density = reshape(node_density(parameters), node_grid)
-raw_simulated = simulate_nodes(vec(reconstructed_density); return_type="raw")
+reconstructed_density = reshape(voxel_density(parameters), voxel_grid)
+raw_simulated = forward(vec(reconstructed_density); return_type="raw")
 save(ISMRMRDFile(simulated_mrd_file), raw_simulated)
 
 density_image_file = joinpath(@__DIR__, "reconstructed_density.png")
 savefig(
-    plot_image(reconstructed_density; title="Finite-difference node density"),
+    plot_image(reconstructed_density; title="Finite-difference voxel density"),
     density_image_file,
 )
 

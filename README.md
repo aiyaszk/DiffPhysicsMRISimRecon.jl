@@ -2,20 +2,43 @@
 
 Differentiable MRI simulation for physics-based reconstruction.
 
-## Node-density reconstruction
+## Voxel-density reconstruction
 
-`DiffPhysicsMRISimReco.jl` creates a 126 × 126 grid of reconstruction nodes over
-the measured field of view. It does not load a brain phantom or use known tissue
-masks. T1 and T2 are fixed, while central finite differences estimate the 15,876
-relative node densities from measured multi-coil data. KomaMRI runs the Bloch
-simulations on the Apple GPU through Metal.jl. One complete gradient requires
-31,752 KomaMRI simulations.
+`DiffPhysicsMRISimReco.jl` estimates a 64 × 64 image of 4,096 relative voxel
+densities at z = 0. Each voxel has 10 bilinearly interpolated in-plane spins on
+each of 10 z slices, giving 100 simulation spins per voxel and 409,600 spins in
+total. T1, T2, and T2* are infinite. The finite-difference step is based on the
+Float32 simulation precision. Each iteration is saved under
+`DiffPhysicsMRISimRecoIterations/`.
+
+The scripts load Metal on macOS and CUDA on other systems. An optional first
+argument selects the acquisition archive; otherwise `~/Desktop/Archive (1)` is
+used.
 
 ```sh
 julia DiffPhysicsMRISimReco.jl
 ```
 
 It saves `reconstructed_density.png` and `simulated_acquisition.mrd`.
+
+## Cross recovery test
+
+`DiffCrossTest.jl` defines a 6 × 6 binary cross, interpolates it onto the same
+10-spin × 10-slice simulation grid, simulates one fully sampled EPI acquisition,
+and recovers the cross with finite differences and gradient descent. It saves
+the truth, initial image, every iteration, and final reconstruction under
+`DiffCrossTestResults/`.
+
+```sh
+julia DiffCrossTest.jl
+```
+
+On Ultron, pass the location of the copied acquisition archive:
+
+```sh
+julia --threads=auto DiffCrossTest.jl /path/to/Archive
+julia --threads=auto DiffPhysicsMRISimReco.jl /path/to/Archive
+```
 
 ## MRIReco comparison
 
