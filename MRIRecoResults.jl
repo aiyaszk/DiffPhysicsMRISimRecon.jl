@@ -1,10 +1,11 @@
-# MRIReco comparison of measured and node-simulated acquisitions
+# Measured-versus-simulated comparison from the KomaMRI coil-sensitivity how-to
 
 using Pkg
 Pkg.activate(@__DIR__)
 Pkg.instantiate()
 
 using KomaMRI, MRICoilSensitivities
+using KomaMRIBase: ArbitraryCoilSens
 using Statistics: quantile
 
 fully_sampled_mrd_file = joinpath(
@@ -19,25 +20,34 @@ accelerated_2x_seq_file = joinpath(
     homedir(),
     "Desktop/Archive (1)/seq/hard_epi_2x_20interleaves_5avg_fatsat.seq",
 )
-simulated_mrd_file = joinpath(@__DIR__, "simulated_acquisition.mrd")
+phantom_2D_3T_file = joinpath(
+    homedir(),
+    "Downloads/brain2D_3T_fat_z1cm_2x_xy.phantom",
+)
 
-function select_profiles!(raw, lines)
-    raw.profiles = raw.profiles[4:(3 + length(lines))]
-    for (profile, line) in zip(raw.profiles, lines)
-        profile.head.idx.kspace_encode_step_1 = UInt16(line)
+recon_size = (128, 128)
+R = 2
+seq = read_seq(accelerated_2x_seq_file)
+
+number_of_shots = Int(seq.DEF["EpiShots"])
+acquired_shot_indices =
+    parse.(Int, split(seq.DEF["EpiAcquiredShots"], ',')) .- 1
+acquired_line_indices = [
+    line_index for shot_index in acquired_shot_indices for
+    line_index in shot_index:number_of_shots:(recon_size[2] - 1)
+]
+@assert length(acquired_line_indices) == recon_size[2] ÷ R
+
+function select_profiles!(raw, line_indices)
+    navigator_count = 3
+    raw.profiles = raw.profiles[
+        (navigator_count + 1):(navigator_count + length(line_indices))
+    ]
+    for (profile, line_index) in zip(raw.profiles, line_indices)
+        profile.head.idx.kspace_encode_step_1 = UInt16(line_index)
     end
     nothing
 end
-
-magnitude_image(image) = abs.(Array(image[:, :, 1, 1, 1, 1]))
-
-recon_size = (128, 128)
-seq = read_seq(accelerated_2x_seq_file)
-shots = Int(seq.DEF["EpiShots"])
-acquired_shots = parse.(Int, split(seq.DEF["EpiAcquiredShots"], ',')) .- 1
-acquired_lines = [
-    line for shot in acquired_shots for line in shot:shots:(recon_size[2] - 1)
-]
 
 raw_reference = RawAcquisitionData(ISMRMRDFile(fully_sampled_mrd_file))
 raw_reference.profiles = raw_reference.profiles[4:(3 + recon_size[2])]
@@ -53,14 +63,9 @@ sensitivity_maps = espirit(
 )
 
 raw_measured = RawAcquisitionData(ISMRMRDFile(accelerated_2x_mrd_file))
-raw_simulated = RawAcquisitionData(ISMRMRDFile(simulated_mrd_file))
-select_profiles!(raw_measured, acquired_lines)
-select_profiles!(raw_simulated, acquired_lines)
-
+select_profiles!(raw_measured, acquired_line_indices)
 acq_measured = AcquisitionData(raw_measured)
-acq_simulated = AcquisitionData(raw_simulated)
 acq_measured.traj[1].circular = false
-acq_simulated.traj[1].circular = false
 
 direct_params = Dict{Symbol,Any}(
     :reco => "direct",
@@ -75,25 +80,76 @@ sense_params = Dict{Symbol,Any}(
     :toeplitz => false,
 )
 
-measured_direct = magnitude_image(reconstruction(acq_measured, direct_params))
-measured_sense = magnitude_image(reconstruction(acq_measured, sense_params))
-simulated_direct = magnitude_image(reconstruction(acq_simulated, direct_params))
-simulated_sense = magnitude_image(reconstruction(acq_simulated, sense_params))
+fov = Float32.(raw_reference.params["reconFOV"]) .* 1f-3
+x = collect(LinRange(-fov[1] / 2, fov[1] / 2, recon_size[1]))
+y = collect(LinRange(-fov[2] / 2, fov[2] / 2, recon_size[2]))
+z = Float32[-fov[3] / 2, 0, fov[3] / 2]
+receiver = ArbitraryCoilSens(
+    x,
+    y,
+    z,
+    repeat(sensitivity_maps, 1, 1, length(z), 1),
+)
 
-results = (
-    ("acquisition_direct.png", reverse(measured_direct; dims=(1, 2)), "Measured direct (R=2)"),
-    ("acquisition_sense.png", reverse(measured_sense; dims=(1, 2)), "Measured SENSE (R=2)"),
-    ("simulated_mrd_direct.png", simulated_direct, "Node-simulated direct (R=2)"),
-    ("simulated_mrd_sense.png", simulated_sense, "Node-simulated SENSE (R=2)"),
+obj = read_phantom(phantom_2D_3T_file)
+raw_simulated = simulate(
+    obj,
+    seq,
+    Scanner(; receiver);
+    physio=CardiacSignal(; heart_rate=1),
+    verbose=false,
 )
 
 output_directory = joinpath(@__DIR__, "MRIRecoResults")
 mkpath(output_directory)
+simulated_mrd_file = joinpath(output_directory, "simulated_acquisition.mrd")
+save(ISMRMRDFile(simulated_mrd_file), raw_simulated)
+raw_simulated = RawAcquisitionData(ISMRMRDFile(simulated_mrd_file))
+select_profiles!(raw_simulated, acquired_line_indices)
+
+acq_simulated = AcquisitionData(raw_simulated)
+acq_simulated.traj[1].circular = false
+
+magnitude_image(image) = abs.(Array(image[:, :, 1, 1, 1, 1]))
+plot_reconstruction(image, title) = plot_image(
+    image;
+    title,
+    zmin=0,
+    zmax=quantile(vec(image), 0.995),
+)
+
+measured_direct = reconstruction(acq_measured, direct_params)
+measured_sense = reconstruction(acq_measured, sense_params)
+simulated_direct = reconstruction(acq_simulated, direct_params)
+simulated_sense = reconstruction(acq_simulated, sense_params)
+
+results = (
+    (
+        "acquisition_direct.png",
+        reverse(magnitude_image(measured_direct); dims=(1, 2)),
+        "Measured direct (R=2)",
+    ),
+    (
+        "acquisition_sense.png",
+        reverse(magnitude_image(measured_sense); dims=(1, 2)),
+        "Measured SENSE (R=2)",
+    ),
+    (
+        "simulated_mrd_direct.png",
+        magnitude_image(simulated_direct),
+        "Simulated MRD direct (R=2)",
+    ),
+    (
+        "simulated_mrd_sense.png",
+        magnitude_image(simulated_sense),
+        "Simulated SENSE (R=2)",
+    ),
+)
+
 foreach(results) do (filename, image, title)
     output_file = joinpath(output_directory, filename)
-    savefig(
-        plot_image(image; title, zmin=0, zmax=quantile(vec(image), 0.995)),
-        output_file,
-    )
+    savefig(plot_reconstruction(image, title), output_file)
     println("Saved: ", output_file)
 end
+
+println("Saved: ", simulated_mrd_file)
