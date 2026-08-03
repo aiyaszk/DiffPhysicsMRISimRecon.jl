@@ -20,6 +20,7 @@ subspin_grid = (5, 2, 1)
 simulation_spins_per_voxel = prod(subspin_grid)
 finite_difference_step = cbrt(eps(Float32))
 maximum_iterations = 20
+decrease_factor = 0.5 # Halves rejected step sizes during backtracking.
 
 seq = read_seq(sequence_file)
 fov = Float64.(seq.DEF["FOV"])
@@ -78,12 +79,13 @@ for iteration in 1:maximum_iterations # Repeats gradient descent up to the itera
         f, x; relstep=finite_difference_step, # Uses central differences with the Float32 step.
     )
     gradient_norm = norm(gradient) # Measures the gradient size for reporting.
-    iszero(gradient_norm) && break # Stops before division when the gradient vanishes.
-    step = 1 / gradient_norm # Proposes a scale-independent unit update.
-    while f(x .- step .* gradient) > loss # Rejects updates that increase the loss.
-        step /= 2 # Halves the update until the loss decreases.
+    iszero(gradient_norm) && break # Stops when there is no descent direction.
+    descent_direction = -gradient # Uses JAXopt's default negative-gradient direction.
+    step = 1.0 # Starts JAXopt-style backtracking from a full step.
+    while f(x .+ step .* descent_direction) > loss # Rejects updates that increase the loss.
+        step *= decrease_factor # Multiplies a rejected step by 0.5.
     end
-    x .-= step .* gradient # Applies the accepted update.
+    x .+= step .* descent_direction # Applies the accepted loss-reducing update.
 
     save_density_image(x, "iteration_$(lpad(iteration, 2, '0')).png", "Iteration $iteration")
     println("Iteration $iteration: loss = $(f(x)), gradient = $gradient_norm")
