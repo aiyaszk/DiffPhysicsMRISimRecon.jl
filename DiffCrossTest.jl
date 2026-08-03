@@ -20,7 +20,6 @@ subspin_grid = (5, 2, 1)
 simulation_spins_per_voxel = prod(subspin_grid)
 finite_difference_step = cbrt(eps(Float32))
 maximum_iterations = 20
-decrease_factor = 0.5 # Halves rejected step sizes during backtracking.
 
 seq = read_seq(sequence_file)
 fov = Float64.(seq.DEF["FOV"])
@@ -70,27 +69,38 @@ save_density_image(x, name, title) = savefig(
 )
 
 save_density_image(x_true, "truth.png", "True cross density")
-x = zeros(voxel_count)
-save_density_image(x, "iteration_00.png", "Iteration 0")
 
-for iteration in 1:maximum_iterations # Repeats gradient descent up to the iteration limit.
-    loss = f(x) # Records the current loss for step acceptance.
-    gradient = FiniteDiff.finite_difference_gradient( # Estimates every density derivative.
-        f, x; relstep=finite_difference_step, # Uses central differences with the Float32 step.
-    )
-    gradient_norm = norm(gradient) # Measures the gradient size for reporting.
-    iszero(gradient_norm) && break # Stops when there is no descent direction.
-    descent_direction = -gradient # Uses JAXopt's default negative-gradient direction.
-    step = 1.0 # Starts JAXopt-style backtracking from a full step.
-    while f(x .+ step .* descent_direction) > loss # Rejects updates that increase the loss.
-        step *= decrease_factor # Multiplies a rejected step by 0.5.
+function reconstruct_cross() # Keeps the optimization variables local to this reconstruction.
+    x = zeros(voxel_count) # Initializes the unknown voxel densities at zero.
+    save_density_image(x, "iteration_00.png", "Iteration 0")
+    ∇fₖ = FiniteDiff.finite_difference_gradient(f, x; relstep=finite_difference_step) # Computes ∇f(x⁰).
+    xₖ₋₁ = copy(x) # Stores the previous x for the adaptive rule.
+    ∇fₖ₋₁ = ∇fₖ # Stores the previous gradient for the adaptive rule.
+    λₖ = 1e-6 # Uses the λ₀ default from the authors' reference implementation.
+    θₖ = Inf # Sets θ₀ so the first adaptive step is limited only by local curvature.
+
+    for iteration in 1:maximum_iterations # Repeats the adaptive update up to the iteration limit.
+        if iteration > 1 # Adapts λₖ after two parameter-gradient pairs are available.
+            ∇fₖ = FiniteDiff.finite_difference_gradient(f, x; relstep=finite_difference_step) # Computes ∇f(xᵏ).
+            Δxₖ = norm(x - xₖ₋₁) # Measures ‖xᵏ - xᵏ⁻¹‖.
+            Δ∇fₖ = norm(∇fₖ - ∇fₖ₋₁) # Measures ‖∇f(xᵏ) - ∇f(xᵏ⁻¹)‖.
+            λₖ₋₁, θₖ₋₁ = λₖ, θₖ # Keeps the previous λ and θ used by Algorithm 1.
+            λₖ = min(sqrt(1 + θₖ₋₁) * λₖ₋₁, iszero(Δ∇fₖ) ? λₖ₋₁ : Δxₖ / (2Δ∇fₖ)) # Computes the adaptive step.
+            θₖ = λₖ / λₖ₋₁ # Computes θₖ for the next iteration.
+        end
+        ∇fₖ_norm = norm(∇fₖ) # Measures the gradient size for stopping and reporting.
+        iszero(∇fₖ_norm) && break # Stops when there is no descent direction.
+        xₖ₋₁ .= x # Saves xᵏ before changing x.
+        ∇fₖ₋₁ = ∇fₖ # Saves ∇f(xᵏ) before computing the next gradient.
+        x .-= λₖ .* ∇fₖ # Computes xᵏ⁺¹ = xᵏ - λₖ∇f(xᵏ).
+
+        save_density_image(x, "iteration_$(lpad(iteration, 2, '0')).png", "Iteration $iteration")
+        println("Iteration $iteration: loss = $(f(x)), gradient = $∇fₖ_norm, λ = $λₖ")
     end
-    x .+= step .* descent_direction # Applies the accepted loss-reducing update.
 
-    save_density_image(x, "iteration_$(lpad(iteration, 2, '0')).png", "Iteration $iteration")
-    println("Iteration $iteration: loss = $(f(x)), gradient = $gradient_norm")
+    save_density_image(x, "reconstructed_density.png", "Reconstructed cross density")
+    println("Final loss: ", f(x))
+    println("Saved images to: ", iteration_directory)
 end
 
-save_density_image(x, "reconstructed_density.png", "Reconstructed cross density")
-println("Final loss: ", f(x))
-println("Saved images to: ", iteration_directory)
+reconstruct_cross()
