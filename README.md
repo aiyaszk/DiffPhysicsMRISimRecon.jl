@@ -23,9 +23,9 @@ It saves `reconstructed_density.png` and `simulated_acquisition.mrd`.
 
 ## Cross recovery test
 
-`DiffCrossTest.jl` defines a 6 × 6 binary cross, interpolates it onto the same
-10-spin × 10-slice simulation grid, simulates one fully sampled EPI acquisition,
-and recovers the cross with finite differences and gradient descent. It saves
+`DiffCrossTest.jl` defines a 6 × 6 × 1 binary cross and bilinearly interpolates it onto
+a 5 × 2 × 1 subspin grid (10 spins per voxel). It simulates one fully sampled EPI acquisition and
+recovers the single slice with finite differences and gradient descent. It saves
 the truth, initial image, every iteration, and final reconstruction under
 `DiffCrossTestResults/`.
 
