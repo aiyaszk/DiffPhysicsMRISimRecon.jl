@@ -8,157 +8,108 @@ using FiniteDiff, KomaMRI
 using Interpolations: Flat, linear_interpolation
 using KomaMRIBase: Phantom
 using LinearAlgebra: norm
-
-if Sys.isapple()
-    @eval using Metal
-else
-    @eval using CUDA
-end
+@eval using $(Sys.isapple() ? :Metal : :CUDA)
 
 archive_directory = isempty(ARGS) ? joinpath(homedir(), "Desktop/Archive (1)") : first(ARGS)
 sequence_file = joinpath(archive_directory, "seq/hard_epi_2x_20interleaves_5avg_fatsat.seq")
 iteration_directory = joinpath(@__DIR__, "DiffCrossAccTestResults")
 mkpath(iteration_directory)
 
-voxel_grid = (6, 6)
-subspin_grid = (5, 2)
-spins_per_voxel_per_slice = prod(subspin_grid)
-slice_count = 10
-simulation_spins_per_voxel = spins_per_voxel_per_slice * slice_count
+voxel_grid = (6, 6, 1)
+subspin_grid = (5, 2, 1)
+simulation_spins_per_voxel = prod(subspin_grid)
 finite_difference_step = cbrt(eps(Float32))
 maximum_iterations = 20
+λ₀ = 1e-6 # Uses the default from the adaptive-gradient reference implementation.
 
 seq = read_seq(sequence_file)
 fov = Float64.(seq.DEF["FOV"])
 scanner = Scanner(; receiver=BirdcageCoilSens(; ncoils=8))
 
-voxel_spacing_x = fov[1] / voxel_grid[1]
-voxel_spacing_y = fov[2] / voxel_grid[2]
-voxel_axis_x = collect(
-    range(
-        -fov[1] / 2 + voxel_spacing_x / 2,
-        fov[1] / 2 - voxel_spacing_x / 2;
-        length=voxel_grid[1],
-    ),
-)
-voxel_axis_y = collect(
-    range(
-        -fov[2] / 2 + voxel_spacing_y / 2,
-        fov[2] / 2 - voxel_spacing_y / 2;
-        length=voxel_grid[2],
-    ),
-)
-voxel_x = repeat(voxel_axis_x, voxel_grid[2])
-voxel_y = repeat(voxel_axis_y; inner=voxel_grid[1])
-voxel_count = length(voxel_x)
+centered_axis(width, count) = range(-width / 2 + width / (2count); step=width / count, length=count) # Places samples at cell centers.
+voxel_count = prod(voxel_grid) # Sets the 36 reconstructed densities.
+voxel_axis_x, voxel_axis_y = centered_axis.(fov[1:2], voxel_grid[1:2]) # Locates densities for interpolation.
+simulation_grid = voxel_grid .* subspin_grid # Expands each voxel into ten simulation spins.
+simulation_axes = centered_axis.(fov, simulation_grid) # Creates the simulation-spin coordinate axes.
+spin_points = vec(collect(Iterators.product(simulation_axes...))) # Flattens the 3D grid for Phantom.
+spin_x = first.(spin_points) # Gives Phantom every spin's x position.
+spin_y = getindex.(spin_points, 2) # Gives Phantom every spin's y position.
+spin_z = last.(spin_points) # Gives Phantom every spin's z position.
+total_spin_count = length(spin_points) # Counts all 36 × 10 spins for Phantom.
 
-simulation_grid = voxel_grid .* subspin_grid
-simulation_spacing_x = fov[1] / simulation_grid[1]
-simulation_spacing_y = fov[2] / simulation_grid[2]
-simulation_axis_x = collect(
-    range(
-        -fov[1] / 2 + simulation_spacing_x / 2,
-        fov[1] / 2 - simulation_spacing_x / 2;
-        length=simulation_grid[1],
-    ),
-)
-simulation_axis_y = collect(
-    range(
-        -fov[2] / 2 + simulation_spacing_y / 2,
-        fov[2] / 2 - simulation_spacing_y / 2;
-        length=simulation_grid[2],
-    ),
-)
-slice_spacing = fov[3] / slice_count
-slice_axis = collect(
-    range(-fov[3] / 2 + slice_spacing / 2, fov[3] / 2 - slice_spacing / 2; length=slice_count),
-)
-inplane_spin_x = repeat(simulation_axis_x, simulation_grid[2])
-inplane_spin_y = repeat(simulation_axis_y; inner=simulation_grid[1])
-spin_x = repeat(inplane_spin_x, slice_count)
-spin_y = repeat(inplane_spin_y, slice_count)
-spin_z = repeat(slice_axis; inner=length(inplane_spin_x))
-spin_count = length(spin_x)
-
-function simulation_object(density)
+function simulation_object(x, params)
     interpolation = linear_interpolation(
-        (voxel_axis_x, voxel_axis_y),
-        reshape(density, voxel_grid);
+        (params.voxel_axis_x, params.voxel_axis_y), reshape(x, params.voxel_grid[1:2]);
         extrapolation_bc=Flat(),
     )
     Phantom(;
         name="cross test simulation spins",
-        x=spin_x,
-        y=spin_y,
-        z=spin_z,
-        ρ=interpolation.(spin_x, spin_y) ./ simulation_spins_per_voxel,
-        T1=fill(Inf, spin_count),
-        T2=fill(Inf, spin_count),
-        T2s=fill(Inf, spin_count),
+        x=params.spin_x,
+        y=params.spin_y,
+        z=params.spin_z,
+        ρ=interpolation.(params.spin_x, params.spin_y) ./ params.simulation_spins_per_voxel,
+        T1=fill(Inf, params.total_spin_count),
+        T2=fill(Inf, params.total_spin_count),
+        T2s=fill(Inf, params.total_spin_count),
     )
 end
 
-sim_params = Dict{String,Any}(
-    "gpu" => true,
-    "precision" => "f32",
-    "sim_method" => Bloch(),
-    "return_type" => "mat",
+sim_params = Dict{String,Any}("gpu" => true, "precision" => "f32", "sim_method" => Bloch(), "return_type" => "mat")
+physio = CardiacSignal(; heart_rate=1)
+params = (;
+    seq, scanner, sim_params, physio, voxel_grid, voxel_axis_x, voxel_axis_y,
+    spin_x, spin_y, spin_z, total_spin_count, simulation_spins_per_voxel,
+    finite_difference_step, maximum_iterations, λ₀, iteration_directory,
 )
 
-forward(density) = simulate(
-    simulation_object(density),
-    seq,
-    scanner;
-    sim_params,
-    physio=CardiacSignal(; heart_rate=1),
-    verbose=false,
+A(x, params) = simulate(
+    simulation_object(x, params), params.seq, params.scanner;
+    sim_params=params.sim_params, physio=params.physio, verbose=false,
 )
 
-inside_vertical_arm =
-    (abs.(voxel_x) .<= voxel_spacing_x) .& (abs.(voxel_y) .<= 2voxel_spacing_y)
-inside_horizontal_arm =
-    (abs.(voxel_x) .<= 2voxel_spacing_x) .& (abs.(voxel_y) .<= voxel_spacing_y)
-true_density = Float64.(inside_vertical_arm .| inside_horizontal_arm)
-target = forward(true_density)
+x_true = vec(Float64[0 0 0 0 0 0; 0 0 1 1 0 0; 0 1 1 1 1 0; 0 1 1 1 1 0; 0 0 1 1 0 0; 0 0 0 0 0 0])
+b = A(x_true, params)
+params = (; params..., b)
+f(x, params)::Float32 = sum(abs2, A(x, params) - params.b) # Evaluates ‖A(x) - b‖² with the configured f32 precision.
 
-objective(density) = begin
-    residual = forward(density) - target
-    sum(abs2, residual) / (2sum(abs2, target))
-end
+save_density_image(x, name, title, params) = savefig(
+    plot_image(reshape(x, params.voxel_grid[1:2]); title), joinpath(params.iteration_directory, name),
+)
 
-function save_density_image(density, name, title)
-    savefig(plot_image(reshape(density, voxel_grid); title), joinpath(iteration_directory, name))
-end
+save_density_image(x_true, "truth.png", "True cross density", params)
 
-save_density_image(true_density, "truth.png", "True cross density")
-parameters = zeros(voxel_count)
-save_density_image(parameters, "iteration_00.png", "Iteration 0")
+function reconstruct(x, params) # Receives the initial densities and every constant optimization parameter.
+    objective(x) = f(x, params) # Fixes params while FiniteDiff varies x.
+    save_density_image(x, "iteration_00.png", "Iteration 0", params)
+    ∇fₖ = FiniteDiff.finite_difference_gradient(objective, x; relstep=params.finite_difference_step) # Computes ∇f(x⁰).
+    xₖ₋₁ = copy(x) # Stores the previous x for the adaptive rule.
+    ∇fₖ₋₁ = ∇fₖ # Stores the previous gradient for the adaptive rule.
+    λₖ = params.λ₀ # Starts with the specified λ₀.
+    θₖ = Inf # Sets θ₀ so the first adaptive step is limited only by local curvature.
 
-for iteration in 1:maximum_iterations
-    loss = objective(parameters)
-    local gradient = FiniteDiff.finite_difference_gradient(
-        objective,
-        parameters;
-        relstep=finite_difference_step,
-        absstep=finite_difference_step,
-    )
-    gradient_norm = norm(gradient)
-    gradient_norm <= 1e-8 && break
+    for iteration in 1:params.maximum_iterations # Repeats the adaptive update up to the iteration limit.
+        if iteration > 1 # Adapts λₖ after two parameter-gradient pairs are available.
+            ∇fₖ = FiniteDiff.finite_difference_gradient(objective, x; relstep=params.finite_difference_step) # Computes ∇f(xᵏ).
+            Δxₖ = norm(x - xₖ₋₁) # Measures ‖xᵏ - xᵏ⁻¹‖.
+            Δ∇fₖ = norm(∇fₖ - ∇fₖ₋₁) # Measures ‖∇f(xᵏ) - ∇f(xᵏ⁻¹)‖.
+            λₖ₋₁, θₖ₋₁ = λₖ, θₖ # Keeps the previous λ and θ used by Algorithm 1.
+            λₖ = min(sqrt(1 + θₖ₋₁) * λₖ₋₁, iszero(Δ∇fₖ) ? λₖ₋₁ : Δxₖ / (2Δ∇fₖ)) # Computes the adaptive step.
+            θₖ = λₖ / λₖ₋₁ # Computes θₖ for the next iteration.
+        end
+        ∇fₖ_norm = norm(∇fₖ) # Measures the gradient size for stopping and reporting.
+        iszero(∇fₖ_norm) && break # Stops when there is no descent direction.
+        xₖ₋₁ .= x # Saves xᵏ before changing x.
+        ∇fₖ₋₁ = ∇fₖ # Saves ∇f(xᵏ) before computing the next gradient.
+        x .-= λₖ .* ∇fₖ # Computes xᵏ⁺¹ = xᵏ - λₖ∇f(xᵏ).
 
-    step = inv(gradient_norm)
-    while objective(parameters .- step .* gradient) > loss
-        step /= 2
+        save_density_image(x, "iteration_$(lpad(iteration, 2, '0')).png", "Iteration $iteration", params)
+        println("Iteration $iteration: loss = $(objective(x)), gradient = $∇fₖ_norm, λ = $λₖ")
     end
-    parameters .-= step .* gradient
-    save_density_image(
-        parameters,
-        "iteration_$(lpad(iteration, 2, '0')).png",
-        "Iteration $iteration",
-    )
-    println("Iteration $iteration: loss = $(objective(parameters)), gradient = $gradient_norm")
+
+    save_density_image(x, "reconstructed_density.png", "Reconstructed cross density", params)
+    println("Final loss: ", objective(x))
+    println("Saved images to: ", params.iteration_directory)
+    x
 end
 
-reconstructed_density = parameters
-save_density_image(reconstructed_density, "reconstructed_density.png", "Reconstructed cross density")
-println("Final loss: ", objective(parameters))
-println("Saved iteration images to: ", iteration_directory)
+reconstruct(zeros(voxel_count), params)
