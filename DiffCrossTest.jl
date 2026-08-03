@@ -20,6 +20,7 @@ subspin_grid = (5, 2, 1)
 simulation_spins_per_voxel = prod(subspin_grid)
 finite_difference_step = cbrt(eps(Float32))
 maximum_iterations = 20
+λ₀ = 1e-6 # Uses the default from the adaptive-gradient reference implementation.
 
 seq = read_seq(sequence_file)
 fov = Float64.(seq.DEF["FOV"])
@@ -36,52 +37,59 @@ spin_y = getindex.(spin_points, 2) # Gives Phantom every spin's y position.
 spin_z = last.(spin_points) # Gives Phantom every spin's z position.
 total_spin_count = length(spin_points) # Counts all 36 × 10 spins for Phantom.
 
-function simulation_object(x)
+function simulation_object(x, params)
     interpolation = linear_interpolation(
-        (voxel_axis_x, voxel_axis_y), reshape(x, voxel_grid[1:2]);
+        (params.voxel_axis_x, params.voxel_axis_y), reshape(x, params.voxel_grid[1:2]);
         extrapolation_bc=Flat(),
     )
     Phantom(;
         name="cross test simulation spins",
-        x=spin_x,
-        y=spin_y,
-        z=spin_z,
-        ρ=interpolation.(spin_x, spin_y) ./ simulation_spins_per_voxel,
-        T1=fill(Inf, total_spin_count),
-        T2=fill(Inf, total_spin_count),
-        T2s=fill(Inf, total_spin_count),
+        x=params.spin_x,
+        y=params.spin_y,
+        z=params.spin_z,
+        ρ=interpolation.(params.spin_x, params.spin_y) ./ params.simulation_spins_per_voxel,
+        T1=fill(Inf, params.total_spin_count),
+        T2=fill(Inf, params.total_spin_count),
+        T2s=fill(Inf, params.total_spin_count),
     )
 end
 
 sim_params = Dict{String,Any}("gpu" => true, "precision" => "f32", "sim_method" => Bloch(), "return_type" => "mat")
+physio = CardiacSignal(; heart_rate=1)
+params = (;
+    seq, scanner, sim_params, physio, voxel_grid, voxel_axis_x, voxel_axis_y,
+    spin_x, spin_y, spin_z, total_spin_count, simulation_spins_per_voxel,
+    finite_difference_step, maximum_iterations, λ₀, iteration_directory,
+)
 
-A(x) = simulate(
-    simulation_object(x), seq, scanner;
-    sim_params, physio=CardiacSignal(; heart_rate=1), verbose=false,
+A(x, params) = simulate(
+    simulation_object(x, params), params.seq, params.scanner;
+    sim_params=params.sim_params, physio=params.physio, verbose=false,
 )
 
 x_true = vec(Float64[0 0 0 0 0 0; 0 0 1 1 0 0; 0 1 1 1 1 0; 0 1 1 1 1 0; 0 0 1 1 0 0; 0 0 0 0 0 0])
-b = A(x_true)
-f(x) = sum(abs2, A(x) - b) # Evaluates ‖A(x) - b‖²
+b = A(x_true, params)
+params = (; params..., b)
+f(x, params)::Float32 = sum(abs2, A(x, params) - params.b) # Evaluates ‖A(x) - b‖² with the configured f32 precision.
 
-save_density_image(x, name, title) = savefig(
-    plot_image(reshape(x, voxel_grid[1:2]); title), joinpath(iteration_directory, name),
+save_density_image(x, name, title, params) = savefig(
+    plot_image(reshape(x, params.voxel_grid[1:2]); title), joinpath(params.iteration_directory, name),
 )
 
-save_density_image(x_true, "truth.png", "True cross density")
+save_density_image(x_true, "truth.png", "True cross density", params)
 
-function reconstruct_cross() # Keeps the optimization variables local to this reconstruction.
-    x = zeros(voxel_count) # Initializes the unknown voxel densities at zero.
-    save_density_image(x, "iteration_00.png", "Iteration 0")
-    ∇fₖ = FiniteDiff.finite_difference_gradient(f, x; relstep=finite_difference_step) # Computes ∇f(x⁰).
+function reconstruct(x, params) # Receives the initial densities and every constant optimization parameter.
+    objective(x) = f(x, params) # Fixes params while FiniteDiff varies x.
+    save_density_image(x, "iteration_00.png", "Iteration 0", params)
+    ∇fₖ = FiniteDiff.finite_difference_gradient(objective, x; relstep=params.finite_difference_step) # Computes ∇f(x⁰).
     xₖ₋₁ = copy(x) # Stores the previous x for the adaptive rule.
     ∇fₖ₋₁ = ∇fₖ # Stores the previous gradient for the adaptive rule.
-    λₖ = 1e-6 # Uses the λ₀ default from the authors' reference implementation.
+    λₖ = params.λ₀ # Starts with the specified λ₀.
     θₖ = Inf # Sets θ₀ so the first adaptive step is limited only by local curvature.
 
-    for iteration in 1:maximum_iterations # Repeats the adaptive update up to the iteration limit.
+    for iteration in 1:params.maximum_iterations # Repeats the adaptive update up to the iteration limit.
         if iteration > 1 # Adapts λₖ after two parameter-gradient pairs are available.
-            ∇fₖ = FiniteDiff.finite_difference_gradient(f, x; relstep=finite_difference_step) # Computes ∇f(xᵏ).
+            ∇fₖ = FiniteDiff.finite_difference_gradient(objective, x; relstep=params.finite_difference_step) # Computes ∇f(xᵏ).
             Δxₖ = norm(x - xₖ₋₁) # Measures ‖xᵏ - xᵏ⁻¹‖.
             Δ∇fₖ = norm(∇fₖ - ∇fₖ₋₁) # Measures ‖∇f(xᵏ) - ∇f(xᵏ⁻¹)‖.
             λₖ₋₁, θₖ₋₁ = λₖ, θₖ # Keeps the previous λ and θ used by Algorithm 1.
@@ -94,13 +102,14 @@ function reconstruct_cross() # Keeps the optimization variables local to this re
         ∇fₖ₋₁ = ∇fₖ # Saves ∇f(xᵏ) before computing the next gradient.
         x .-= λₖ .* ∇fₖ # Computes xᵏ⁺¹ = xᵏ - λₖ∇f(xᵏ).
 
-        save_density_image(x, "iteration_$(lpad(iteration, 2, '0')).png", "Iteration $iteration")
-        println("Iteration $iteration: loss = $(f(x)), gradient = $∇fₖ_norm, λ = $λₖ")
+        save_density_image(x, "iteration_$(lpad(iteration, 2, '0')).png", "Iteration $iteration", params)
+        println("Iteration $iteration: loss = $(objective(x)), gradient = $∇fₖ_norm, λ = $λₖ")
     end
 
-    save_density_image(x, "reconstructed_density.png", "Reconstructed cross density")
-    println("Final loss: ", f(x))
-    println("Saved images to: ", iteration_directory)
+    save_density_image(x, "reconstructed_density.png", "Reconstructed cross density", params)
+    println("Final loss: ", objective(x))
+    println("Saved images to: ", params.iteration_directory)
+    x
 end
 
-reconstruct_cross()
+reconstruct(zeros(voxel_count), params)
