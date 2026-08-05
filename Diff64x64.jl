@@ -1,4 +1,4 @@
-# Finite-difference reconstruction of an 8 x 8 density from an accelerated in-vivo brain acquisition
+# Finite-difference reconstruction of an 64 x 64 density from an accelerated in-vivo brain acquisition
 
 using Pkg
 Pkg.activate(@__DIR__)
@@ -21,11 +21,11 @@ accelerated_mrd_file = joinpath(
     "mrd_hdf5/meas_MID01109_FID34203_hard_epi_2x_20interleaves_5avg_fatsat.mrd",
 )
 sequence_file = joinpath(archive_directory, "seq/hard_epi_2x_20interleaves_5avg_fatsat.seq")
-iteration_directory = joinpath(@__DIR__, "Diff8x8")
+iteration_directory = joinpath(@__DIR__, "Diff64x64")
 mkpath(iteration_directory)
 
 recon_size = (128, 128)
-voxel_grid = (8, 8, 1)
+voxel_grid = (64, 64, 1)
 subspin_grid = (5, 2, 1)
 simulation_spins_per_voxel = prod(subspin_grid)
 navigator_count = 3
@@ -115,7 +115,7 @@ function simulation_object(x, params)
         extrapolation_bc=Flat(),
     )
     Phantom(;
-        name="8 x 8 in-vivo brain reconstruction",
+        name="64 x 64 in-vivo brain reconstruction",
         x=params.spin_x,
         y=params.spin_y,
         z=params.spin_z,
