@@ -1,5 +1,6 @@
 [deps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 FiniteDiff = "6a86dc24-6348-571c-b903-95158fe2bd41"
 Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 KomaMRI = "6a340f8b-2cdf-4c04-99be-4953d9b66d0a"
@@ -10,4 +11,5 @@ KomaMRIPlots = "76db0263-63f3-4d26-bb9a-5dba378db904"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MRICoilSensitivities = "c57eb701-aafc-44a2-a53c-128049758959"
 Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
+Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
