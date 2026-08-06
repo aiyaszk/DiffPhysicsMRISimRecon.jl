@@ -1,59 +1,32 @@
 # DiffPhysicsMRISimRecon
 
-Differentiable MRI simulation for physics-based reconstruction.
+Physics-based MRI reconstruction with reverse-mode automatic differentiation and finite differences.
 
-## Voxel-density reconstruction
+## Layout
 
-`DiffPhysicsMRISimReco.jl` estimates a 64 × 64 image of 4,096 relative voxel
-densities at z = 0. Each voxel has 10 bilinearly interpolated in-plane spins on
-each of 10 z slices, giving 100 simulation spins per voxel and 409,600 spins in
-total. T1, T2, and T2* are infinite. The finite-difference step is based on the
-Float32 simulation precision. Each iteration is saved under
-`DiffPhysicsMRISimRecoIterations/`.
+- `AD/`: shared AD reconstruction and resolution entry points.
+- `FiniteDiff/`: shared finite-difference reconstruction and resolution entry points.
+- `MRIRecoResults/`: measured-versus-simulated MRIReco comparisons.
+- `DiffCrossAccTestResults/`: accelerated cross-test results.
+- `DiffCrossTestResults/`: fully sampled cross-test results.
 
-The scripts load Metal on macOS and CUDA on other systems. An optional first
-argument selects the acquisition archive; otherwise `~/Desktop/Archive (1)` is
-used.
+The protected result folders remain at the repository root. Resolution-specific brain results are stored beside their method, for example `AD/ADDiff8x8/` and `FiniteDiff/Diff8x8/`.
 
-```sh
-julia DiffPhysicsMRISimReco.jl
-```
+## Brain reconstruction
 
-It saves `reconstructed_density.png` and `simulated_acquisition.mrd`.
-
-## Cross recovery test
-
-`DiffCrossTest.jl` defines a 6 × 6 × 1 binary cross and bilinearly interpolates it onto
-a 5 × 2 × 1 subspin grid (10 spins per voxel). It simulates one fully sampled EPI acquisition and
-recovers the single slice with finite differences and gradient descent. It saves
-the truth, initial image, every iteration, and final reconstruction under
-`DiffCrossTestResults/`.
+Run either method from the repository root:
 
 ```sh
-julia DiffCrossTest.jl
+julia --project=. AD/ADDiff8x8.jl
+julia --project=. FiniteDiff/Diff8x8.jl
 ```
 
-On Ultron, pass the location of the copied acquisition archive:
+Replace `8x8` with `16x16`, `32x32`, `64x64`, or `128x128`. An optional first argument selects the acquisition archive; otherwise `~/Desktop/Archive (1)` is used.
+
+## Finite-difference checks
 
 ```sh
-julia --threads=auto DiffCrossTest.jl /path/to/Archive
-julia --threads=auto DiffPhysicsMRISimReco.jl /path/to/Archive
+julia --project=. FiniteDiff/DiffCrossTest.jl
+julia --project=. FiniteDiff/DiffCrossAccTest.jl
+julia --project=. FiniteDiff/MRIRecoResults.jl
 ```
-
-## MRIReco comparison
-
-Run the model-based reconstruction first, then:
-
-```sh
-julia MRIRecoResults.jl
-```
-
-The second script reconstructs the measured and node-simulated MRD files and
-saves:
-
-- `MRIRecoResults/acquisition_direct.png`
-- `MRIRecoResults/acquisition_sense.png`
-- `MRIRecoResults/simulated_mrd_direct.png`
-- `MRIRecoResults/simulated_mrd_sense.png`
-
-Both scripts activate and instantiate the included Julia environment.
