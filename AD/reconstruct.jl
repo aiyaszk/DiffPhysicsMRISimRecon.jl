@@ -168,7 +168,12 @@ function f_gradient(x, model)
 end
 
 save_density_image(x, name, title, params) = savefig(
-    plot_image(reshape(x, params.voxel_grid[1:2]); title),
+    plot_image(
+        reshape(x, params.voxel_grid[1:2]);
+        title,
+        zmin=0,
+        zmax=max(maximum(x), eps(Float32)),
+    ),
     joinpath(params.iteration_directory, name),
 )
 
