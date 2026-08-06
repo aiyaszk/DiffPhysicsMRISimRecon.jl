@@ -167,12 +167,14 @@ function f_gradient(x, model)
     return result.val, result.derivs[1]
 end
 
+const PROTON_DENSITY_RANGE = (0f0, 1f0)
+
 save_density_image(x, name, title, params) = savefig(
     plot_image(
         reshape(x, params.voxel_grid[1:2]);
         title,
-        zmin=0,
-        zmax=max(maximum(x), eps(Float32)),
+        zmin=first(PROTON_DENSITY_RANGE),
+        zmax=last(PROTON_DENSITY_RANGE),
     ),
     joinpath(params.iteration_directory, name),
 )
