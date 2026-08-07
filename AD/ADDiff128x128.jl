@@ -5,4 +5,4 @@ Pkg.activate(joinpath(@__DIR__, ".."))
 Pkg.instantiate()
 
 include("reconstruct.jl")
-run_ad_reconstruction((128, 128, 1); navigator_correction=true)
+run_ad_reconstruction((128, 128, 1))
