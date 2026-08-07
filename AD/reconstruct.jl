@@ -1,13 +1,12 @@
 using Enzyme
 using KomaMRI
-using KomaMRIBase: ArbitraryCoilSens, Phantom, get_sens
+using KomaMRIBase: ArbitraryCoilSens, Phantom, bilinear_stencil, get_sens,
+    interpolate_voxels
 using KomaMRICore: ISMRMRD_ACQ_IS_REVERSE
 using LinearAlgebra: dot, norm
 using MRICoilSensitivities
 using Reactant
 @eval using $(Sys.isapple() ? :Metal : :CUDA)
-
-isdefined(Main, :ADSequence) || include("ad_multicoil.jl")
 
 Reactant.set_default_backend(get(ENV, "REACTANT_BACKEND", Sys.isapple() ? "cpu" : "cuda"))
 Reactant.allowscalar(false)
